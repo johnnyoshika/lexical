@@ -70,6 +70,7 @@ import TwitterPlugin from './plugins/TwitterPlugin';
 import YouTubePlugin from './plugins/YouTubePlugin';
 import ContentEditable from './ui/ContentEditable';
 import Placeholder from './ui/Placeholder';
+import SentencePlugin from './plugins/SentencePlugin';
 
 const skipCollaborationInit =
   // @ts-expect-error
@@ -239,6 +240,7 @@ export default function Editor(): JSX.Element {
         <div>{showTableOfContents && <TableOfContentsPlugin />}</div>
         {shouldUseLexicalContextMenu && <ContextMenuPlugin />}
         <ActionsPlugin isRichText={isRichText} />
+        <SentencePlugin />
       </div>
       {showTreeView && <TreeViewPlugin />}
     </>
