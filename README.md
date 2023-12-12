@@ -381,3 +381,26 @@ Lexical engineers are checking this regularly.
 ### License
 
 Lexical is [MIT licensed](https://github.com/facebook/lexical/blob/main/LICENSE).
+
+### npm link
+
+In this repo:
+
+```
+npm run build-release
+cd packages/lexical
+npm link
+cd ../lexical-react
+npm link
+```
+
+In another project:
+
+```
+npm link lexical
+npm link @lexical/react
+```
+
+Note: `npm link @lexical/react` seems to wipe out `npm link lexical`, so best to only link to one at a time
+
+More problems: https://discord.com/channels/953974421008293909/953974421486436393/1184275462608932874
