@@ -3,10 +3,13 @@ import {
   $createRangeSelection,
   $getRoot,
   $isElementNode,
+  $isTextNode,
   $setSelection,
   LexicalNode,
   Point,
   TextNode,
+  $isLineBreakNode,
+  ElementNode,
 } from 'lexical';
 
 const SENTENCE = 'Roses are red.';
@@ -59,26 +62,69 @@ function $pointToPath(point: Point): PointPath {
   return {rootIndex, textOffset};
 }
 
+// https://github.com/facebook/lexical/blob/5a649b964208964d44bc6222f0fcfe3f4840f860/packages/lexical/src/LexicalConstants.ts#L80
+const DOUBLE_LINE_BREAK = '\n\n';
+
 function $setPointFromPointPath(point: Point, path: PointPath): void {
   const root = $getRoot();
   const top = assertNotNil(root.getChildAtIndex(path.rootIndex));
-  let {textOffset} = path;
   assert($isElementNode(top));
-  let targetNode: TextNode | null = null;
-  for (const node of top.getAllTextNodes()) {
-    const size = node.getTextContentSize();
-    targetNode = node;
-    if (size < textOffset) {
-      textOffset -= size;
-    } else {
-      break;
+
+  let {textOffset} = path;
+
+  function findTargetNode(node: LexicalNode): TextNode | null {
+    if ($isTextNode(node)) return findTargetInTextNode(node);
+    else if ($isElementNode(node)) return findTargetInElementNode(node);
+    else return null;
+  }
+
+  function findTargetInTextNode(textNode: TextNode): TextNode | null {
+    const size = textNode.getTextContentSize();
+
+    // We're done, we found the target node
+    if (size >= textOffset) return textNode;
+
+    textOffset -= size;
+    return null;
+  }
+
+  function findTargetInElementNode(elementNode: ElementNode): TextNode | null {
+    const children = elementNode.getChildren();
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i];
+
+      if ($isLineBreakNode(child)) textOffset -= 1;
+
+      const targetNode = findTargetNode(child);
+      if (targetNode) return targetNode;
+
+      adjustTextOffsetForElementNode(child, i, children.length);
+    }
+
+    return null;
+  }
+
+  // Lexical's getTextContent() adds DOUBLE_LINE_BREAK between non inline elements: https://github.com/facebook/lexical/blob/1a3c9114e2c58f92d22edeac2a9030ace2129f3b/packages/lexical/src/nodes/LexicalElementNode.ts#L247-L263
+  // so we need to account for those extra 2 line break characters when counting textOffset.
+  function adjustTextOffsetForElementNode(
+    node: LexicalNode,
+    index: number,
+    totalChildren: number,
+  ) {
+    // The following if condition is borrowed from https://github.com/facebook/lexical/blob/1a3c9114e2c58f92d22edeac2a9030ace2129f3b/packages/lexical/src/nodes/LexicalElementNode.ts#L254-L260
+    if (
+      $isElementNode(node) &&
+      index !== totalChildren - 1 &&
+      !node.isInline()
+    ) {
+      textOffset -= DOUBLE_LINE_BREAK.length;
     }
   }
 
-  if (!targetNode) {
-    // Something went wrong
+  const targetNode = findTargetNode(top);
 
-    // @ts-ignore b/c TypeScript complains that Point was exported as a type
+  if (!targetNode) {
+    // Something went wrong - targetNode shouldn't be null
     point.set(top.getKey(), 0, 'element');
   } else {
     point.set(
@@ -106,37 +152,13 @@ const findFirstSentenceMatch = (rootTexts: string[], sentence: string) => {
   return null;
 };
 
-// Essentially a clone of https://github.com/facebook/lexical/blob/fe940b94ef9200b8bf170715387291809a6c644b/packages/lexical/src/nodes/LexicalElementNode.ts#L247-L263
-// except that we don't add DOUBLE_LINE_BREAK between block elements (e.g. table cells listitems, etc).
-// This is important because $setPointFromPointPath() counts characters in text node, so we don't want extra line break characters being added between them.
-const getTextContent = (rootNode: LexicalNode): string => {
-  let textContent = '';
-
-  if (!$isElementNode(rootNode)) return textContent;
-
-  const children = rootNode.getChildren();
-  const childrenLength = children.length;
-  for (let i = 0; i < childrenLength; i++) {
-    const child = children[i];
-
-    // Lexical's getTextContent() adds DOUBLE_LINE_BREAK between non inline elements: https://github.com/facebook/lexical/blob/main/packages/lexical/src/nodes/LexicalElementNode.ts#L255-L257,
-    // so we're not going to call the default child.getTextContent() in order to prevent that
-    if ($isElementNode(child) && !child.isInline()) {
-      textContent += getTextContent(child);
-    } else {
-      textContent += child.getTextContent();
-    }
-  }
-  return textContent;
-};
-
 const SentencePlugin = () => {
   const [editor] = useLexicalComposerContext();
 
   const handleClick = () => {
     editor.update(() => {
       const rootNodes = $getRoot().getChildren();
-      const rootTexts = rootNodes.map(getTextContent);
+      const rootTexts = rootNodes.map((node) => node.getTextContent());
       console.log('rootTexts', rootTexts);
 
       const sentenceMatch = findFirstSentenceMatch(rootTexts, SENTENCE);
