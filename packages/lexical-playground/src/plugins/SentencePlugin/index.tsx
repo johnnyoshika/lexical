@@ -75,7 +75,9 @@ function $setPointFromPointPath(point: Point, path: PointPath): void {
   function findTargetNode(node: LexicalNode): TextNode | null {
     if ($isTextNode(node)) return findTargetInTextNode(node);
     else if ($isElementNode(node)) return findTargetInElementNode(node);
-    else return null;
+    else if ($isLineBreakNode(node)) textOffset -= 1;
+
+    return null;
   }
 
   function findTargetInTextNode(textNode: TextNode): TextNode | null {
@@ -92,8 +94,6 @@ function $setPointFromPointPath(point: Point, path: PointPath): void {
     const children = elementNode.getChildren();
     for (let i = 0; i < children.length; i++) {
       const child = children[i];
-
-      if ($isLineBreakNode(child)) textOffset -= 1;
 
       const targetNode = findTargetNode(child);
       if (targetNode) return targetNode;
