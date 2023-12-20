@@ -8,7 +8,10 @@ import {
   LexicalNode,
   Point,
   TextNode,
-  $isLineBreakNode,
+  EditorState,
+  $getSelection,
+  $isRangeSelection,
+  $isRootNode,
   ElementNode,
 } from 'lexical';
 
@@ -19,13 +22,37 @@ interface PointPath {
   textOffset: number;
 }
 
+const saveSelection = (anchor: PointPath, focus: PointPath) => {
+  localStorage.setItem('anchor', JSON.stringify(anchor));
+  localStorage.setItem('focus', JSON.stringify(focus));
+};
+
+const getSelection = () => {
+  const anchor = localStorage.getItem('anchor');
+  const focus = localStorage.getItem('focus');
+
+  if (!anchor || !focus) return null;
+
+  return {
+    anchor: JSON.parse(anchor) as PointPath,
+    focus: JSON.parse(focus) as PointPath,
+  };
+};
+
+const saveEditorState = (editorState: EditorState) => {
+  localStorage.setItem('editorState', JSON.stringify(editorState));
+};
+
+const getEditorState = () => {
+  const editorState = localStorage.getItem('editorState');
+
+  if (!editorState) return null;
+
+  return editorState;
+};
+
 function assert(condition: boolean): asserts condition {
   if (!condition) throw new Error('Assertion failed');
-}
-
-// Ensures that every case in a union type is handled.
-function assertNever(x: never): never {
-  throw new Error(`Unexpected object: ${x}`);
 }
 
 function assertNotNil<T>(value: T | null | undefined): T {
@@ -38,32 +65,41 @@ function assertNotNil<T>(value: T | null | undefined): T {
 // Borrowed from @etrepum on Lexical Discord: https://discord.com/channels/953974421008293909/1182591716713299979/1182593059632992337
 function $pointToPath(point: Point): PointPath {
   let node = point.getNode();
-  const top = node.getTopLevelElementOrThrow();
-  const rootIndex = top.getIndexWithinParent();
-  let textOffset = 0;
-  if (point.type === 'text') {
-    textOffset += point.offset;
-  } else if (point.type === 'element') {
-    assert($isElementNode(node));
-    node.getChildren().forEach((n, i) => {
-      if (i < point.offset) {
-        textOffset += n.getTextContentSize();
-      }
-    });
-  } else {
-    assertNever(point.type);
+  let textOffset = point.offset;
+  let top: LexicalNode | null = null;
+
+  function setOffsetFromNode(node: LexicalNode): void {
+    if ($isTextNode(node)) setOffsetFromTextNode(node);
+    else if ($isElementNode(node)) setOffsetFromElementNode(node);
   }
-  for (; !node.is(top); node = node.getParentOrThrow()) {
-    node.getPreviousSiblings().forEach((n) => {
-      textOffset += n.getTextContentSize();
-    });
+
+  function setOffsetFromTextNode(node: TextNode): void {
+    textOffset += node.getTextContentSize();
   }
+
+  function setOffsetFromElementNode(top: ElementNode): void {
+    top.getAllTextNodes().forEach(setOffsetFromTextNode);
+  }
+
+  function setOffsetFromPreviousSiblings(node: LexicalNode): void {
+    const parent = node.getParent();
+    if (!parent || $isRootNode(parent)) {
+      top = node;
+      return;
+    }
+
+    node.getPreviousSiblings().forEach(setOffsetFromNode);
+    setOffsetFromPreviousSiblings(parent);
+  }
+
+  setOffsetFromPreviousSiblings(node);
+
+  if (!top) throw new Error('Expected top to be defined');
+
+  const rootIndex = (top as LexicalNode).getIndexWithinParent();
 
   return {rootIndex, textOffset};
 }
-
-// https://github.com/facebook/lexical/blob/5a649b964208964d44bc6222f0fcfe3f4840f860/packages/lexical/src/LexicalConstants.ts#L80
-const DOUBLE_LINE_BREAK = '\n\n';
 
 function $setPointFromPointPath(point: Point, path: PointPath): void {
   const root = $getRoot();
@@ -75,7 +111,6 @@ function $setPointFromPointPath(point: Point, path: PointPath): void {
   function findTargetNode(node: LexicalNode): TextNode | null {
     if ($isTextNode(node)) return findTargetInTextNode(node);
     else if ($isElementNode(node)) return findTargetInElementNode(node);
-    else if ($isLineBreakNode(node)) textOffset -= 1;
 
     return null;
   }
@@ -97,28 +132,9 @@ function $setPointFromPointPath(point: Point, path: PointPath): void {
 
       const targetNode = findTargetNode(child);
       if (targetNode) return targetNode;
-
-      adjustTextOffsetForElementNode(child, i, children.length);
     }
 
     return null;
-  }
-
-  // Lexical's getTextContent() adds DOUBLE_LINE_BREAK between non inline elements: https://github.com/facebook/lexical/blob/1a3c9114e2c58f92d22edeac2a9030ace2129f3b/packages/lexical/src/nodes/LexicalElementNode.ts#L247-L263
-  // so we need to account for those extra 2 line break characters when counting textOffset.
-  function adjustTextOffsetForElementNode(
-    node: LexicalNode,
-    index: number,
-    totalChildren: number,
-  ) {
-    // The following if condition is borrowed from https://github.com/facebook/lexical/blob/1a3c9114e2c58f92d22edeac2a9030ace2129f3b/packages/lexical/src/nodes/LexicalElementNode.ts#L254-L260
-    if (
-      $isElementNode(node) &&
-      index !== totalChildren - 1 &&
-      !node.isInline()
-    ) {
-      textOffset -= DOUBLE_LINE_BREAK.length;
-    }
   }
 
   const targetNode = findTargetNode(top);
@@ -135,50 +151,64 @@ function $setPointFromPointPath(point: Point, path: PointPath): void {
   }
 }
 
-const findFirstSentenceMatch = (rootTexts: string[], sentence: string) => {
-  for (let i = 0; i < rootTexts.length; i++) {
-    if (!rootTexts[i].includes(sentence)) continue;
-
-    const startOffset = rootTexts[i].indexOf(SENTENCE);
-    const endOffset = startOffset + SENTENCE.length;
-
-    return {
-      rootIndex: i,
-      startOffset,
-      endOffset,
-    };
-  }
-
-  return null;
-};
-
 const SentencePlugin = () => {
   const [editor] = useLexicalComposerContext();
 
-  const handleClick = () => {
+  const handlSaveEditorState = () => {
+    const editorState = editor.getEditorState();
+    saveEditorState(editorState);
+  };
+
+  const handlLoadEditorState = () => {
+    const editorState = getEditorState();
+    if (!editorState) return;
+
     editor.update(() => {
-      const rootNodes = $getRoot().getChildren();
-      const rootTexts = rootNodes.map((node) => node.getTextContent());
-      console.log('rootTexts', rootTexts);
+      editor.setEditorState(editor.parseEditorState(editorState));
+    });
+  };
 
-      const sentenceMatch = findFirstSentenceMatch(rootTexts, SENTENCE);
-      if (!sentenceMatch) return;
+  const handlSaveSelection = () => {
+    editor.update(() => {
+      const selection = $getSelection();
+      if (!selection) return;
 
+      if (!$isRangeSelection(selection)) return;
+
+      const anchor = $pointToPath(selection.anchor);
+      const focus = $pointToPath(selection.focus);
+
+      saveSelection(anchor, focus);
+    });
+  };
+
+  const handlLoadSelection = () => {
+    editor.update(() => {
       const selection = $createRangeSelection();
+      const selectionPaths = getSelection();
+      if (!selectionPaths) return;
+
       $setPointFromPointPath(selection.anchor, {
-        rootIndex: sentenceMatch.rootIndex,
-        textOffset: sentenceMatch.startOffset,
+        rootIndex: selectionPaths.anchor.rootIndex,
+        textOffset: selectionPaths.anchor.textOffset,
       });
       $setPointFromPointPath(selection.focus, {
-        rootIndex: sentenceMatch.rootIndex,
-        textOffset: sentenceMatch.endOffset,
+        rootIndex: selectionPaths.focus.rootIndex,
+        textOffset: selectionPaths.focus.textOffset,
       });
 
       $setSelection(selection);
     });
   };
 
-  return <button onClick={handleClick}>Highlight '{SENTENCE}'</button>;
+  return (
+    <>
+      <button onClick={handlSaveEditorState}>Save EditorState</button>{' '}
+      <button onClick={handlLoadEditorState}>Load EditorState</button>{' '}
+      <button onClick={handlSaveSelection}>Save Selection</button>
+      <button onClick={handlLoadSelection}>Load Selection</button>
+    </>
+  );
 };
 
 export default SentencePlugin;
