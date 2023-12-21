@@ -15,6 +15,8 @@ import {
   ElementNode,
 } from 'lexical';
 
+const SENTENCE = 'Roses are red.';
+
 interface PointPath {
   rootIndex: number;
   textOffset: number;
@@ -158,6 +160,23 @@ function $setPointFromPointPath(point: Point, path: PointPath): void {
   }
 }
 
+const findFirstSentenceMatch = (rootTexts: string[], sentence: string) => {
+  for (let i = 0; i < rootTexts.length; i++) {
+    if (!rootTexts[i].includes(sentence)) continue;
+
+    const startOffset = rootTexts[i].indexOf(SENTENCE);
+    const endOffset = startOffset + SENTENCE.length;
+
+    return {
+      rootIndex: i,
+      startOffset,
+      endOffset,
+    };
+  }
+
+  return null;
+};
+
 const SentencePlugin = () => {
   const [editor] = useLexicalComposerContext();
 
@@ -208,12 +227,36 @@ const SentencePlugin = () => {
     });
   };
 
+  const handleHighlight = () => {
+    editor.update(() => {
+      const rootNodes = $getRoot().getChildren();
+      const rootTexts = rootNodes.map((node) => node.getTextContent());
+      console.log('rootTexts', rootTexts);
+
+      const sentenceMatch = findFirstSentenceMatch(rootTexts, SENTENCE);
+      if (!sentenceMatch) return;
+
+      const selection = $createRangeSelection();
+      $setPointFromPointPath(selection.anchor, {
+        rootIndex: sentenceMatch.rootIndex,
+        textOffset: sentenceMatch.startOffset,
+      });
+      $setPointFromPointPath(selection.focus, {
+        rootIndex: sentenceMatch.rootIndex,
+        textOffset: sentenceMatch.endOffset,
+      });
+
+      $setSelection(selection);
+    });
+  };
+
   return (
     <>
       <button onClick={handlSaveEditorState}>Save EditorState</button>{' '}
       <button onClick={handlLoadEditorState}>Load EditorState</button>{' '}
       <button onClick={handlSaveSelection}>Save Selection</button>
       <button onClick={handlLoadSelection}>Load Selection</button>
+      <button onClick={handleHighlight}>Highlight '{SENTENCE}'</button>
     </>
   );
 };
