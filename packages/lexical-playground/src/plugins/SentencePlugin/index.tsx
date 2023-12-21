@@ -13,6 +13,7 @@ import {
   $isRangeSelection,
   $isRootNode,
   ElementNode,
+  $isLineBreakNode,
 } from 'lexical';
 
 const SENTENCE = 'Roses are red.';
@@ -104,10 +105,25 @@ function $pointToPath(point: Point): PointPath {
 function findTargetNode(
   node: LexicalNode,
   textOffset: number,
+  adjustTextOffsetForLineBreakNode: (textOffset: number) => number,
+  adjustTextOffsetForElementNode: (
+    node: LexicalNode,
+    index: number,
+    totalChildren: number,
+    textOffset: number,
+  ) => number,
 ): [TextNode | null, number] {
   if ($isTextNode(node)) return findTargetInTextNode(node, textOffset);
   else if ($isElementNode(node))
-    return findTargetInElementNode(node, textOffset);
+    return findTargetInElementNode(
+      node,
+      textOffset,
+      adjustTextOffsetForLineBreakNode,
+      adjustTextOffsetForElementNode,
+    );
+
+  if ($isLineBreakNode(node))
+    textOffset = adjustTextOffsetForLineBreakNode(textOffset);
 
   return [null, textOffset];
 }
@@ -128,25 +144,61 @@ function findTargetInTextNode(
 function findTargetInElementNode(
   elementNode: ElementNode,
   textOffset: number,
+  adjustTextOffsetForLineBreakNode: (textOffset: number) => number,
+  adjustTextOffsetForElementNode: (
+    node: LexicalNode,
+    index: number,
+    totalChildren: number,
+    textOffset: number,
+  ) => number,
 ): [TextNode | null, number] {
   const children = elementNode.getChildren();
-  for (const child of children) {
+  for (let i = 0; i < children.length; i++) {
+    const child = children[i];
+
     // Can't just assign to textOffset directly b/c TypeScript complains of: Block-scoped variable 'textOffset' used before its declaration.ts(2448)
-    const [targetNode, updatedTextOffset] = findTargetNode(child, textOffset);
+    const [targetNode, updatedTextOffset] = findTargetNode(
+      child,
+      textOffset,
+      adjustTextOffsetForLineBreakNode,
+      adjustTextOffsetForElementNode,
+    );
     textOffset = updatedTextOffset;
     if (targetNode) return [targetNode, textOffset];
+
+    textOffset = adjustTextOffsetForElementNode(
+      child,
+      i,
+      children.length,
+      textOffset,
+    );
   }
 
   return [null, textOffset];
 }
 
 // Inspired by @etrepum on Lexical Discord: https://discord.com/channels/953974421008293909/1182591716713299979/1182593059632992337
-function $setPointFromPointPath(point: Point, path: PointPath): void {
+function $setPointFromPointPath(
+  point: Point,
+  path: PointPath,
+  adjustTextOffsetForLineBreakNode: (textOffset: number) => number,
+  adjustTextOffsetForElementNode: (
+    node: LexicalNode,
+    index: number,
+    totalChildren: number,
+    textOffset: number,
+  ) => number,
+): void {
   const root = $getRoot();
   const top = assertNotNil(root.getChildAtIndex(path.rootIndex));
   assert($isElementNode(top));
 
-  const [targetNode, textOffset] = findTargetNode(top, path.textOffset);
+  const [targetNode, textOffset] = findTargetNode(
+    top,
+    path.textOffset,
+    adjustTextOffsetForLineBreakNode,
+    adjustTextOffsetForElementNode,
+  );
 
   if (!targetNode) {
     // Something went wrong - targetNode shouldn't be null
@@ -209,25 +261,71 @@ const SentencePlugin = () => {
   };
 
   const handlLoadSelection = () => {
+    // No-op, as we don't have to adjust for line breaks b/c they're not factored in when serializing and deserialing the selection
+    const adjustTextOffsetForLineBreakNode = (textOffset: number) => textOffset;
+    // No-op, as we don't have to adjust for double line breaks b/c they're not factored in when serializing and deserialing the selection
+    const adjustTextOffsetForElementNode = (
+      _node: LexicalNode,
+      _index: number,
+      _totalChildren: number,
+      textOffset: number,
+    ) => textOffset;
     editor.update(() => {
       const selection = $createRangeSelection();
       const selectionPaths = getSelection();
       if (!selectionPaths) return;
 
-      $setPointFromPointPath(selection.anchor, {
-        rootIndex: selectionPaths.anchor.rootIndex,
-        textOffset: selectionPaths.anchor.textOffset,
-      });
-      $setPointFromPointPath(selection.focus, {
-        rootIndex: selectionPaths.focus.rootIndex,
-        textOffset: selectionPaths.focus.textOffset,
-      });
+      $setPointFromPointPath(
+        selection.anchor,
+        {
+          rootIndex: selectionPaths.anchor.rootIndex,
+          textOffset: selectionPaths.anchor.textOffset,
+        },
+        adjustTextOffsetForLineBreakNode,
+        adjustTextOffsetForElementNode,
+      );
+      $setPointFromPointPath(
+        selection.focus,
+        {
+          rootIndex: selectionPaths.focus.rootIndex,
+          textOffset: selectionPaths.focus.textOffset,
+        },
+        adjustTextOffsetForLineBreakNode,
+        adjustTextOffsetForElementNode,
+      );
 
       $setSelection(selection);
     });
   };
 
   const handleHighlight = () => {
+    // When exporting editorState to plain text, line break counts for 1 character, so we need to account for that
+    const adjustTextOffsetForLineBreakNode = (textOffset: number) =>
+      textOffset - 1;
+
+    // Lexical's getTextContent() adds DOUBLE_LINE_BREAK between non inline elements: https://github.com/facebook/lexical/blob/1a3c9114e2c58f92d22edeac2a9030ace2129f3b/packages/lexical/src/nodes/LexicalElementNode.ts#L247-L263
+    // so we need to account for those extra 2 line break characters when counting textOffset.
+    const adjustTextOffsetForElementNode = (
+      node: LexicalNode,
+      index: number,
+      totalChildren: number,
+      textOffset: number,
+    ) => {
+      // https://github.com/facebook/lexical/blob/5a649b964208964d44bc6222f0fcfe3f4840f860/packages/lexical/src/LexicalConstants.ts#L80
+      const DOUBLE_LINE_BREAK = '\n\n';
+
+      // The following if condition is borrowed from https://github.com/facebook/lexical/blob/1a3c9114e2c58f92d22edeac2a9030ace2129f3b/packages/lexical/src/nodes/LexicalElementNode.ts#L254-L260
+      if (
+        $isElementNode(node) &&
+        index !== totalChildren - 1 &&
+        !node.isInline()
+      ) {
+        textOffset -= DOUBLE_LINE_BREAK.length;
+      }
+
+      return textOffset;
+    };
+
     editor.update(() => {
       const rootNodes = $getRoot().getChildren();
       const rootTexts = rootNodes.map((node) => node.getTextContent());
@@ -237,14 +335,24 @@ const SentencePlugin = () => {
       if (!sentenceMatch) return;
 
       const selection = $createRangeSelection();
-      $setPointFromPointPath(selection.anchor, {
-        rootIndex: sentenceMatch.rootIndex,
-        textOffset: sentenceMatch.startOffset,
-      });
-      $setPointFromPointPath(selection.focus, {
-        rootIndex: sentenceMatch.rootIndex,
-        textOffset: sentenceMatch.endOffset,
-      });
+      $setPointFromPointPath(
+        selection.anchor,
+        {
+          rootIndex: sentenceMatch.rootIndex,
+          textOffset: sentenceMatch.startOffset,
+        },
+        adjustTextOffsetForLineBreakNode,
+        adjustTextOffsetForElementNode,
+      );
+      $setPointFromPointPath(
+        selection.focus,
+        {
+          rootIndex: sentenceMatch.rootIndex,
+          textOffset: sentenceMatch.endOffset,
+        },
+        adjustTextOffsetForLineBreakNode,
+        adjustTextOffsetForElementNode,
+      );
 
       $setSelection(selection);
     });
