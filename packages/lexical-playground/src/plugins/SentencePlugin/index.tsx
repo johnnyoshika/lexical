@@ -15,8 +15,6 @@ import {
   ElementNode,
 } from 'lexical';
 
-const SENTENCE = 'Roses are red.';
-
 interface PointPath {
   rootIndex: number;
   textOffset: number;
@@ -62,7 +60,7 @@ function assertNotNil<T>(value: T | null | undefined): T {
   return value;
 }
 
-// Borrowed from @etrepum on Lexical Discord: https://discord.com/channels/953974421008293909/1182591716713299979/1182593059632992337
+// Inspired by @etrepum on Lexical Discord: https://discord.com/channels/953974421008293909/1182591716713299979/1182593059632992337
 function $pointToPath(point: Point): PointPath {
   let node = point.getNode();
   let textOffset = point.offset;
@@ -101,43 +99,52 @@ function $pointToPath(point: Point): PointPath {
   return {rootIndex, textOffset};
 }
 
+function findTargetNode(
+  node: LexicalNode,
+  textOffset: number,
+): [TextNode | null, number] {
+  if ($isTextNode(node)) return findTargetInTextNode(node, textOffset);
+  else if ($isElementNode(node))
+    return findTargetInElementNode(node, textOffset);
+
+  return [null, textOffset];
+}
+
+function findTargetInTextNode(
+  textNode: TextNode,
+  textOffset: number,
+): [TextNode | null, number] {
+  const size = textNode.getTextContentSize();
+
+  // We're done, we found the target node
+  if (size >= textOffset) return [textNode, textOffset];
+
+  textOffset -= size;
+  return [null, textOffset];
+}
+
+function findTargetInElementNode(
+  elementNode: ElementNode,
+  textOffset: number,
+): [TextNode | null, number] {
+  const children = elementNode.getChildren();
+  for (const child of children) {
+    // Can't just assign to textOffset directly b/c TypeScript complains of: Block-scoped variable 'textOffset' used before its declaration.ts(2448)
+    const [targetNode, updatedTextOffset] = findTargetNode(child, textOffset);
+    textOffset = updatedTextOffset;
+    if (targetNode) return [targetNode, textOffset];
+  }
+
+  return [null, textOffset];
+}
+
+// Inspired by @etrepum on Lexical Discord: https://discord.com/channels/953974421008293909/1182591716713299979/1182593059632992337
 function $setPointFromPointPath(point: Point, path: PointPath): void {
   const root = $getRoot();
   const top = assertNotNil(root.getChildAtIndex(path.rootIndex));
   assert($isElementNode(top));
 
-  let {textOffset} = path;
-
-  function findTargetNode(node: LexicalNode): TextNode | null {
-    if ($isTextNode(node)) return findTargetInTextNode(node);
-    else if ($isElementNode(node)) return findTargetInElementNode(node);
-
-    return null;
-  }
-
-  function findTargetInTextNode(textNode: TextNode): TextNode | null {
-    const size = textNode.getTextContentSize();
-
-    // We're done, we found the target node
-    if (size >= textOffset) return textNode;
-
-    textOffset -= size;
-    return null;
-  }
-
-  function findTargetInElementNode(elementNode: ElementNode): TextNode | null {
-    const children = elementNode.getChildren();
-    for (let i = 0; i < children.length; i++) {
-      const child = children[i];
-
-      const targetNode = findTargetNode(child);
-      if (targetNode) return targetNode;
-    }
-
-    return null;
-  }
-
-  const targetNode = findTargetNode(top);
+  const [targetNode, textOffset] = findTargetNode(top, path.textOffset);
 
   if (!targetNode) {
     // Something went wrong - targetNode shouldn't be null
