@@ -62,66 +62,80 @@ function $pointToPath(point: Point): PointPath {
   return {rootIndex, textOffset};
 }
 
-// https://github.com/facebook/lexical/blob/5a649b964208964d44bc6222f0fcfe3f4840f860/packages/lexical/src/LexicalConstants.ts#L80
-const DOUBLE_LINE_BREAK = '\n\n';
+function findTargetNode(
+  node: LexicalNode,
+  textOffset: number,
+): [TextNode | null, number] {
+  if ($isTextNode(node)) return findTargetInTextNode(node, textOffset);
+  else if ($isElementNode(node))
+    return findTargetInElementNode(node, textOffset);
+  else if ($isLineBreakNode(node)) textOffset -= 1;
+
+  return [null, textOffset];
+}
+
+function findTargetInTextNode(
+  textNode: TextNode,
+  textOffset: number,
+): [TextNode | null, number] {
+  const size = textNode.getTextContentSize();
+
+  // We're done, we found the target node
+  if (size >= textOffset) return [textNode, textOffset];
+
+  textOffset -= size;
+  return [null, textOffset];
+}
+
+function findTargetInElementNode(
+  elementNode: ElementNode,
+  textOffset: number,
+): [TextNode | null, number] {
+  const children = elementNode.getChildren();
+  for (let i = 0; i < children.length; i++) {
+    const child = children[i];
+
+    // Can't just assign to textOffset directly b/c TypeScript complains of: Block-scoped variable 'textOffset' used before its declaration.ts(2448)
+    const [targetNode, updatedTextOffset] = findTargetNode(child, textOffset);
+    textOffset = updatedTextOffset;
+    if (targetNode) return [targetNode, textOffset];
+
+    textOffset = adjustTextOffsetForElementNode(
+      child,
+      i,
+      children.length,
+      textOffset,
+    );
+  }
+
+  return [null, textOffset];
+}
+
+// Lexical's getTextContent() adds DOUBLE_LINE_BREAK between non inline elements: https://github.com/facebook/lexical/blob/1a3c9114e2c58f92d22edeac2a9030ace2129f3b/packages/lexical/src/nodes/LexicalElementNode.ts#L247-L263
+// so we need to account for those extra 2 line break characters when counting textOffset.
+function adjustTextOffsetForElementNode(
+  node: LexicalNode,
+  index: number,
+  totalChildren: number,
+  textOffset: number,
+) {
+  // https://github.com/facebook/lexical/blob/5a649b964208964d44bc6222f0fcfe3f4840f860/packages/lexical/src/LexicalConstants.ts#L80
+  const DOUBLE_LINE_BREAK = '\n\n';
+
+  // The following if condition is borrowed from https://github.com/facebook/lexical/blob/1a3c9114e2c58f92d22edeac2a9030ace2129f3b/packages/lexical/src/nodes/LexicalElementNode.ts#L254-L260
+  if ($isElementNode(node) && index !== totalChildren - 1 && !node.isInline()) {
+    textOffset -= DOUBLE_LINE_BREAK.length;
+  }
+
+  return textOffset;
+}
 
 function $setPointFromPointPath(point: Point, path: PointPath): void {
   const root = $getRoot();
   const top = assertNotNil(root.getChildAtIndex(path.rootIndex));
   assert($isElementNode(top));
 
-  let {textOffset} = path;
-
-  function findTargetNode(node: LexicalNode): TextNode | null {
-    if ($isTextNode(node)) return findTargetInTextNode(node);
-    else if ($isElementNode(node)) return findTargetInElementNode(node);
-    else if ($isLineBreakNode(node)) textOffset -= 1;
-
-    return null;
-  }
-
-  function findTargetInTextNode(textNode: TextNode): TextNode | null {
-    const size = textNode.getTextContentSize();
-
-    // We're done, we found the target node
-    if (size >= textOffset) return textNode;
-
-    textOffset -= size;
-    return null;
-  }
-
-  function findTargetInElementNode(elementNode: ElementNode): TextNode | null {
-    const children = elementNode.getChildren();
-    for (let i = 0; i < children.length; i++) {
-      const child = children[i];
-
-      const targetNode = findTargetNode(child);
-      if (targetNode) return targetNode;
-
-      adjustTextOffsetForElementNode(child, i, children.length);
-    }
-
-    return null;
-  }
-
-  // Lexical's getTextContent() adds DOUBLE_LINE_BREAK between non inline elements: https://github.com/facebook/lexical/blob/1a3c9114e2c58f92d22edeac2a9030ace2129f3b/packages/lexical/src/nodes/LexicalElementNode.ts#L247-L263
-  // so we need to account for those extra 2 line break characters when counting textOffset.
-  function adjustTextOffsetForElementNode(
-    node: LexicalNode,
-    index: number,
-    totalChildren: number,
-  ) {
-    // The following if condition is borrowed from https://github.com/facebook/lexical/blob/1a3c9114e2c58f92d22edeac2a9030ace2129f3b/packages/lexical/src/nodes/LexicalElementNode.ts#L254-L260
-    if (
-      $isElementNode(node) &&
-      index !== totalChildren - 1 &&
-      !node.isInline()
-    ) {
-      textOffset -= DOUBLE_LINE_BREAK.length;
-    }
-  }
-
-  const targetNode = findTargetNode(top);
+  const [targetNode, textOffset] = findTargetNode(top, path.textOffset);
 
   if (!targetNode) {
     // Something went wrong - targetNode shouldn't be null
