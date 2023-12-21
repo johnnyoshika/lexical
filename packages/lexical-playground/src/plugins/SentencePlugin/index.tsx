@@ -64,7 +64,7 @@ function assertNotNil<T>(value: T | null | undefined): T {
 }
 
 // Inspired by @etrepum on Lexical Discord: https://discord.com/channels/953974421008293909/1182591716713299979/1182593059632992337
-function $pointToPath(point: Point): PointPath {
+const $pointToPath = (point: Point): PointPath => {
   let node = point.getNode();
   let textOffset = point.offset;
   let top: LexicalNode | null = null;
@@ -100,9 +100,9 @@ function $pointToPath(point: Point): PointPath {
   const rootIndex = (top as LexicalNode).getIndexWithinParent();
 
   return {rootIndex, textOffset};
-}
+};
 
-function findTargetNode(
+const findTargetNode = (
   node: LexicalNode,
   textOffset: number,
   adjustTextOffsetForLineBreakNode: (textOffset: number) => number,
@@ -112,7 +112,7 @@ function findTargetNode(
     totalChildren: number,
     textOffset: number,
   ) => number,
-): [TextNode | null, number] {
+): [TextNode | null, number] => {
   if ($isTextNode(node)) return findTargetInTextNode(node, textOffset);
   else if ($isElementNode(node))
     return findTargetInElementNode(
@@ -126,12 +126,12 @@ function findTargetNode(
     textOffset = adjustTextOffsetForLineBreakNode(textOffset);
 
   return [null, textOffset];
-}
+};
 
-function findTargetInTextNode(
+const findTargetInTextNode = (
   textNode: TextNode,
   textOffset: number,
-): [TextNode | null, number] {
+): [TextNode | null, number] => {
   const size = textNode.getTextContentSize();
 
   // We're done, we found the target node
@@ -139,9 +139,9 @@ function findTargetInTextNode(
 
   textOffset -= size;
   return [null, textOffset];
-}
+};
 
-function findTargetInElementNode(
+const findTargetInElementNode = (
   elementNode: ElementNode,
   textOffset: number,
   adjustTextOffsetForLineBreakNode: (textOffset: number) => number,
@@ -151,7 +151,7 @@ function findTargetInElementNode(
     totalChildren: number,
     textOffset: number,
   ) => number,
-): [TextNode | null, number] {
+): [TextNode | null, number] => {
   const children = elementNode.getChildren();
   for (let i = 0; i < children.length; i++) {
     const child = children[i];
@@ -175,10 +175,10 @@ function findTargetInElementNode(
   }
 
   return [null, textOffset];
-}
+};
 
 // Inspired by @etrepum on Lexical Discord: https://discord.com/channels/953974421008293909/1182591716713299979/1182593059632992337
-function $setPointFromPointPath(
+const $setPointFromPointPath = (
   point: Point,
   path: PointPath,
   adjustTextOffsetForLineBreakNode: (textOffset: number) => number,
@@ -188,7 +188,7 @@ function $setPointFromPointPath(
     totalChildren: number,
     textOffset: number,
   ) => number,
-): void {
+): void => {
   const root = $getRoot();
   const top = assertNotNil(root.getChildAtIndex(path.rootIndex));
   assert($isElementNode(top));
@@ -210,7 +210,7 @@ function $setPointFromPointPath(
       'text',
     );
   }
-}
+};
 
 const findFirstSentenceMatch = (rootTexts: string[], sentence: string) => {
   for (let i = 0; i < rootTexts.length; i++) {
